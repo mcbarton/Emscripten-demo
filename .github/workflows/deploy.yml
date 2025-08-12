@@ -1,0 +1,79 @@
+name: Emscripten
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04-arm, macos-15, windows-2025]
+
+    steps:
+    - uses: actions/checkout@v5
+
+    - name: Setup emsdk
+      run: |
+          git clone --depth=1 https://github.com/emscripten-core/emsdk.git
+          cd emsdk
+          ./emsdk install latest
+
+    - name: Build Website on Unix systems
+      if: ${{ runner.os != 'windows' }}
+      run: |
+        set -e
+        ./emsdk/emsdk activate latest
+        source ./emsdk/emsdk_env.sh
+        emcc main.cpp -o index.html -sEXPORTED_FUNCTIONS=_double_number -sEXPORTED_RUNTIME_METHODS="ccall,cwrap" --emrun --shell-file=custom.html
+
+
+    - name: Build Website on Windows
+      if: ${{ runner.os == 'windows' }}
+      run: |
+        function Error-On-Failure {
+          param (
+              [Parameter(Mandatory)]
+              [ScriptBlock]$Command
+          )
+
+         & $Command
+
+         if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+         }
+        }
+        .\emsdk\emsdk activate latest
+        Error-On-Failure { emcc.bat main.cpp -o index.html -sEXPORTED_FUNCTIONS=_double_number -sEXPORTED_RUNTIME_METHODS="ccall,cwrap" --emrun --shell-file=custom.html }
+        mkdir 'website'
+        mv ./index.html ./website
+        mv ./index.js ./website
+        mv ./index.wasm ./website
+
+    - name: Upload artifact
+      if: ${{ runner.os == 'windows' }}
+      uses: actions/upload-pages-artifact@v3
+      with:
+        path: ./website
+
+  deploy:
+    needs: build
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
