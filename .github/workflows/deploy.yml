@@ -20,12 +20,13 @@ jobs:
 
     steps:
     - uses: actions/checkout@v5
+      with:
+        submodules: true
 
     - name: Setup emsdk
       run: |
           git clone --depth=1 https://github.com/emscripten-core/emsdk.git
-          cd emsdk
-          ./emsdk install latest
+          ./emsdk/emsdk install latest
 
     - name: Build Website on Unix systems
       if: ${{ runner.os != 'windows' }}
@@ -33,8 +34,94 @@ jobs:
         set -e
         ./emsdk/emsdk activate latest
         source ./emsdk/emsdk_env.sh
-        emcc main.cpp -o index.html -sEXPORTED_FUNCTIONS=_double_number -sEXPORTED_RUNTIME_METHODS="ccall,cwrap" --emrun --shell-file=custom.html
+        emcc code.cpp -o index.html -sEXPORTED_FUNCTIONS=_double_number -sEXPORTED_RUNTIME_METHODS="ccall,cwrap" --shell-file=custom.html
+        emcc code.cpp -o index.so -sEXPORTED_RUNTIME_METHODS="ccall,cwrap" -s SIDE_MODULE=1
+        emcmake cmake -DCMAKE_CXX_FLAGS="-fPIC" -DCMAKE_C_FLAGS="-fPIC" ./googletest/
+        emmake make
+        emcc test_main.cpp -o tests.html -s MAIN_MODULE=1 --emrun ./index.so ./lib/libgtest.a -L$PWD/lib/  -I$PWD/googletest/googletest/include/
+        node tests.js
+        # Fresh install browsers, and run Emscripten tests in them
+        # This is to match the Emscripten build instructions, where
+        # we run in a fresh browser, to stop any extra installed
+        # stuff interferring with the running of the tests
+        # Explaination of options for emrun
+        # --browser (name of browser on path)
+        # --kill_exit makes it so that when emrun finishes,
+        # that the headless browser we create is killed along with it
+        # --timeout 60 is such that emrun is killed after 60 seconds if
+        # still running. emrun should have finished long before then,
+        # so if it is still running, something went wrong (such as a test
+        # which crashed the html file). This will cause the ci to fail,
+        # as a non 0 value of will be returned.
+        # In the case of Chrome we have the extra --no-sandbox flag, as on
+        # Ubuntu Chrome will refuse to run otherwise, as it expects to have
+        # been installed with admin privileges. This flag allows it to run
+        # in userspace.
+        os="${{ matrix.os }}"
+        if [[ "${os}" == "macos"* ]]; then
+          # Install Firefox
+          wget "https://download.mozilla.org/?product=firefox-latest&os=osx&lang=en-US" -O Firefox-latest.dmg
+          hdiutil attach Firefox-latest.dmg
+          cp -r /Volumes/Firefox/Firefox.app $PWD
+          hdiutil detach /Volumes/Firefox
+          cd ./Firefox.app/Contents/MacOS/
+          export PATH="$PWD:$PATH"
+          cd -
 
+          # Install Google Chrome
+          wget https://dl.google.com/chrome/mac/stable/accept_tos%3Dhttps%253A%252F%252Fwww.google.com%252Fintl%252Fen_ph%252Fchrome%252Fterms%252F%26_and_accept_tos%3Dhttps%253A%252F%252Fpolicies.google.com%252Fterms/googlechrome.pkg
+          pkgutil --expand-full googlechrome.pkg google-chrome
+          cd ./google-chrome/GoogleChrome.pkg/Payload/Google\ Chrome.app/Contents/MacOS/
+          export PATH="$PWD:$PATH"
+          cd -
+
+          # Run tests in browsers
+          echo "Running tests in Firefox"
+          emrun --browser="firefox" --kill_exit --timeout 60 --browser-args="--headless"  tests.html
+          echo "Running tests in Google Chrome"
+          emrun --browser="Google Chrome" --kill_exit --timeout 60 --browser-args="--headless --no-sandbox"  tests.html
+          sudo safaridriver --enable
+          python -m pip install selenium
+          echo "Running tests in Safari"
+          emrun --no_browser --kill_exit --timeout 60 --browser-args="--headless --no-sandbox"  tests.html &
+          python ./browser_tests_safari.py tests.html
+        else
+          export ARCHITECHURE=$(uname -m)
+          if [[ "$ARCHITECHURE" != "aarch64" ]]; then
+            # Install Google Chrome
+            wget https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+            dpkg-deb -x google-chrome-stable_current_amd64.deb $PWD/chrome
+            cd ./chrome/opt/google/chrome/
+            export PATH="$PWD:$PATH"
+            cd -
+
+            # Install Firefox
+            wget https://ftp.mozilla.org/pub/firefox/releases/138.0.1/linux-x86_64/en-GB/firefox-138.0.1.tar.xz
+            tar -xJf firefox-138.0.1.tar.xz
+            cd ./firefox
+            export PATH="$PWD:$PATH"
+            cd -
+
+            # Run tests in browsers
+            echo "Running tests in Firefox"
+            emrun --browser="firefox" --kill_exit --timeout 60 --browser-args="--headless"  tests.html
+            echo "Running tests in Google Chrome"
+            emrun --browser="google-chrome" --kill_exit --timeout 60 --browser-args="--headless --no-sandbox"  tests.html
+          else
+            # Install Firefox
+            wget https://ftp.mozilla.org/pub/firefox/releases/138.0.1/linux-aarch64/en-GB/firefox-138.0.1.tar.xz
+            tar -xJf firefox-138.0.1.tar.xz
+            cd ./firefox
+            export PATH="$PWD:$PATH"
+            cd -
+
+            # Run tests in browsers
+            echo "Running tests in Firefox"
+            emrun --browser="firefox" --kill_exit --timeout 60 --browser-args="--headless"  tests.html
+            echo "Running tests in Firefox"
+            emrun --browser="firefox" --kill_exit --timeout 60 --browser-args="--headless"  tests.html
+          fi
+        fi
 
     - name: Build Website on Windows
       if: ${{ runner.os == 'windows' }}
@@ -52,11 +139,32 @@ jobs:
          }
         }
         .\emsdk\emsdk activate latest
-        Error-On-Failure { emcc.bat main.cpp -o index.html -sEXPORTED_FUNCTIONS=_double_number -sEXPORTED_RUNTIME_METHODS="ccall,cwrap" --emrun --shell-file=custom.html }
+        Error-On-Failure { emcc.bat code.cpp -o index.html -sEXPORTED_FUNCTIONS=_double_number -sEXPORTED_RUNTIME_METHODS="ccall,cwrap" --shell-file=custom.html }
         mkdir 'website'
         mv ./index.html ./website
         mv ./index.js ./website
         mv ./index.wasm ./website
+        Error-On-Failure { emcc.bat code.cpp -o index.so -sEXPORTED_RUNTIME_METHODS="ccall,cwrap" -s SIDE_MODULE=1 }
+        Error-On-Failure { emcmake.bat cmake -DCMAKE_CXX_FLAGS="-fPIC" -DCMAKE_C_FLAGS="-fPIC" ./googletest/ }
+        Error-On-Failure { emmake.bat make }
+        $env:PWD_DIR= $PWD.Path
+        Error-On-Failure { emcc.bat test_main.cpp -o tests.html -s MAIN_MODULE=1 --emrun ./index.so ./lib/libgtest.a -L"$env:PWD_DIR/lib/"  -I"$env:PWD_DIR/googletest/googletest/include/" }
+        Error-On-Failure { node tests.js }
+        Invoke-WebRequest -Uri "https://commondatastorage.googleapis.com/chromium-browser-snapshots/Win/1411573/chrome-win.zip" -OutFile "$PWD\chrome-win.zip" -Verbose
+        Expand-Archive -Path "$PWD\chrome-win.zip" -DestinationPath "$PWD" -Force -Verbose
+        Invoke-WebRequest -Uri "https://download.mozilla.org/?product=firefox-latest-ssl&os=win64&lang=en-US" -OutFile "firefox-setup.exe" -Verbose
+        & "C:\Program Files\7-Zip\7z.exe" x "firefox-setup.exe"
+        $env:PATH="$PWD\core;$PWD\chrome-win;$env:PATH"
+        echo "PATH=$env:PATH"
+        echo "PATH=$env:PATH" >> $env:GITHUB_ENV
+        echo "Running tests in Firefox"
+        Error-On-Failure { emrun.bat --browser="firefox.exe" --kill_exit --timeout 60 --browser-args="--headless"  tests.html }
+        echo "Running tests in Chromium"
+        Error-On-Failure { emrun.bat --browser="chrome.exe" --kill_exit --timeout 60 --browser-args="--headless --no-sandbox"  tests.html }
+        mv ./index.so ./website
+        mv ./tests.wasm ./website
+        mv ./tests.js ./website
+        mv ./tests.html ./website
 
     - name: Upload artifact
       if: ${{ runner.os == 'windows' }}
