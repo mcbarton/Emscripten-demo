@@ -16,7 +16,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04-arm, macos-15, windows-2025,windows-11-arm]
+        os: [windows-11-arm]
 
     steps:
     - uses: actions/checkout@v5
@@ -26,13 +26,13 @@ jobs:
     - name: Setup emsdk
       run: |
           git clone --depth=1 https://github.com/emscripten-core/emsdk.git
-          ./emsdk/emsdk install latest
+          ./emsdk/emsdk install sdk-main-64bit
 
     - name: Build Website on Unix systems
       if: ${{ runner.os != 'windows' }}
       run: |
         set -e
-        ./emsdk/emsdk activate latest
+        ./emsdk/emsdk activate sdk-main-64bit
         source ./emsdk/emsdk_env.sh
         emcc code.cpp -o index.html -sEXPORTED_FUNCTIONS=_double_number -sEXPORTED_RUNTIME_METHODS="ccall,cwrap" --shell-file=custom.html
         emcc code.cpp -o index.so -sEXPORTED_RUNTIME_METHODS="ccall,cwrap" -s SIDE_MODULE=1
@@ -138,7 +138,7 @@ jobs:
             exit $LASTEXITCODE
          }
         }
-        .\emsdk\emsdk activate latest
+        .\emsdk\emsdk activate sdk-main-64bit
         Error-On-Failure { emcc.bat code.cpp -o index.html -sEXPORTED_FUNCTIONS=_double_number -sEXPORTED_RUNTIME_METHODS="ccall,cwrap" --shell-file=custom.html }
         mkdir 'website'
         mv ./index.html ./website
